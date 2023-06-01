@@ -67,13 +67,13 @@ def radians(angle):
 
 @ti.func
 def rot(a):
-    '''return rotation matrix'''
+    """return rotation matrix"""
     return mat2(ti.cos(a), -ti.sin(a), 
                 ti.sin(a), ti.cos(a))
 
 @ti.func
 def multiply2_right(mat, vec):
-    '''multiply 2-d vector on (2, 2) matrix (from the right) result = M * v'''
+    """multiply 2-d vector on (2, 2) matrix (from the right) result = M * v"""
     return vec2(vec.dot(mat[0, :]), vec.dot(mat[1, :]))
 
 @ti.func
@@ -81,22 +81,19 @@ def dot(p, q):
     """ Scalar product of 2 vectors """
     return p.dot(q)
 
+
 @ti.func
 def sdf_lenses(p: vec2):
-
-    half_side = 0.5
-    q = abs(p) - vec2(half_side)
-
-    distance = length(ti.max(q, 0.))
-
-    center = vec2(half_side, 0.)
-    radius = half_side
-    distance += abs(min(length(p - center) - radius, 0.))
-
+    """mask for 2 symmetrical lenses"""
+    r = 0.25
+    q = ti.abs(p) - vec2(3. / 2. * r, r)
+    distance = ti.max(ti.max(q.x, q.y), 0)
+    distance += ti.max( -(length(ti.abs(p)) - r), 0)
     return distance
 
 @ti.func
 def sdf_equilateral_triangle(p : vec2):
+    """mask foro equilateral triangle"""
     k = ti.sqrt(3.0)
     r = 0.25
     p.x = ti.abs(p.x) - r
@@ -108,6 +105,7 @@ def sdf_equilateral_triangle(p : vec2):
 
 @ti.func
 def get_rgb(matrix, row):
+    """get row with index 'row' from matrix 3x3 as vec3"""
     return vec3(
         matrix[row, 0],
         matrix[row, 1],

@@ -5,7 +5,6 @@ from mainImage import mainImage
 import time
 
 ti.init(arch=ti.gpu)
-# ti.init(debug=True)
 
 # resolution and pixels
 asp = 16./9
@@ -15,19 +14,20 @@ resolution = w, h
 vec2_int = ti.types.vector(2, ti.i32)
 iResolution = vec2_int(w, h)
 
-acc = 0.1         # вес кадра для аккумулятора
+acc = 0.1 # frame weight for accumulator
 
-imp_freq = 400.    # "частота" для генерации нескольких волн импульса
+imp_freq = 400. # "frequency" to generate multiple pulse waves
 imp_sigma = vec2(1., asp) * 0.005
-s_pos = vec2(-0.5, 0.)  # положение источника
-angle = 0.
+s_pos = vec2(-0.5, 0.) # light source position
+angle = 32.
+# angle = 0.
 
 
-h = 1.0  # пространственный шаг решетки
-c = 1.0  # скорость распространения волн
-dt = h / (c * 1.5)  # временной шаг
+h = 1.0  # grating spacing
+c = 1.0  # wave speed
+dt = h / (c * 1.5)  # time step
 
-n = vec3(  # коэффициент преломления
+n = vec3(  # refractive index
     1.30, # R
     1.35, # G
     1.40  # B
@@ -41,26 +41,26 @@ tensor_field = ti.Matrix.field(n=3, m=3, dtype=ti.f32, shape=resolution)
 color = ti.Vector.field(3, dtype=ti.f32, shape=resolution)
 
 accumulator = ti.Vector.field(3, dtype=ti.f32, shape=resolution)
-""" аккумулятор для кадого цвета для накопления возмущений """
+""" accumulator for each color to accumulate perturbations """
 
 kappa = ti.Vector.field(3, dtype=ti.f32, shape=resolution)
-""" вектор констант """
+""" kappa-constants vector field """
 
 sdf_mask = ti.field(ti.f32, shape=resolution)
-""" маска для линзы """
+""" field for mask """
 
 @ti.func
 def define_mask(a: ti.f32 = 0.01, b: ti.f32 = 0.0):
     """
-    Расчет треугольной маски размером (ny, nx) c плавным переходом между 0 и 1
+    Calculation of a triangular mask of size (ny, nx) with a smooth transition between 0 and 1
     """
     w = iResolution.x
     h = iResolution.y
     for y in range(h):
         for x in range(w):
             uv = (vec2(x, y) - 0.5 * vec2(w, h)) / h
-            # d = sdf_lenses(uv)
-            d = sdf_equilateral_triangle(uv)
+            d = sdf_lenses(uv)
+            # d = sdf_equilateral_triangle(uv)
             sdf_mask[x, y] = smoothstep(a, b, d)
 
 @ti.func
@@ -82,18 +82,14 @@ def wave_impulse(point, # vec2,
     return : амплитуда импульса в точки point
     """
     d = (point - center_position) / sigma
-    # d = (point - center_position) / vec2(0.001, asp)
-
-    # (d[0]**2 / (sigma[0] ** 2) + d[1]**2 / (sigma[1] ** 2))
     return ti.exp(-0.05 * dot(d, d)) / 400. * ti.cos(freq * point.x)
-    # return ti.exp(-0.5 * dot(d, d)) * ti.cos(freq * point.x)
 
 @ti.func
 def impulse():
     """
-    Расчет импульса возмущений на нулевой итерации
+    Calculation of an pertrubation impulse at the zero iteration 
     """
-    s_alpha = -radians(angle)  # направление источника
+    s_alpha = -radians(angle)  # direction of the source
     s_rot = rot(s_alpha)
 
     w = iResolution.x
@@ -102,21 +98,20 @@ def impulse():
         for x in range(1, w - 1):
             uv = (vec2(x, y) - 0.5 * vec2(w, h)) / h
             init_impulse: ti.f32 = wave_impulse(multiply2_right(s_rot, uv), s_pos, imp_freq, imp_sigma)
-            # init_impulse: ti.f32 = wave_impulse(uv, s_pos, imp_freq, imp_sigma)
             tensor_field[x, y] += init_impulse
 
 
 
 @ti.func
 def define_kappa():
-    """ инициализация константы каппы """ 
+    """ init the kappa constant """ 
     for fragCoord in ti.grouped(tensor_field):
         kappa[fragCoord] = (c * dt / h) * (sdf_mask[fragCoord] / n + 1. - sdf_mask[fragCoord])
 
 @ti.func
 def open_boundary():
     """
-    Граничные условия открытой границы
+    Boundary conditions for an open boundary
     """
     w = iResolution.x
     h = iResolution.y
@@ -175,7 +170,7 @@ def propagate():
 @ti.func
 def accumulate():
     """
-    Накопление возмущений, создаваемых волнами
+    Accumulation of perturbations created by waves
     """
     w = iResolution.x
     h = iResolution.y
@@ -183,15 +178,12 @@ def accumulate():
         for x in range(1, w - 1):
             accumulator[x, y] += acc * ti.abs(get_rgb(tensor_field[x, y], 0)) * kappa[x, y] / (c * dt / h) / 2.
 
-@ti.func
-def create_rgb():
-    for fragCoord in ti.grouped(accumulator):
-        color[fragCoord] = clamp(accumulator[fragCoord], 0., 1.)
-
 
 @ti.kernel
 def init_kernel():
-    """ с первой итерацией необходимо инициализировать каппу(константу) и придать начальный импульс системе """
+    """ 
+    with the first iteration, the kappa (constant) is initialized and the initial impulse to the system is given
+    """
     define_mask(0.01, 0.0)
     define_kappa()
     impulse()
@@ -199,18 +191,14 @@ def init_kernel():
     
 @ti.kernel
 def render():
+    """
+    function to update system state
+    """
     open_boundary()
     propagate()
     accumulate()
     for fragCoord in ti.grouped(accumulator):
-        color[fragCoord] = clamp(accumulator[fragCoord], 0., 1.)**2 + sdf_mask[fragCoord] * 0.2
-
-
-# @ti.kernel
-# def show_sdf():
-#     define_mask()
-#     for fragCoord in ti.grouped(accumulator):
-#         color[fragCoord] = sdf_mask[fragCoord]
+        color[fragCoord] = clamp(accumulator[fragCoord], 0., 1.)**2 + sdf_mask[fragCoord] * 0.1
 
 gui = ti.GUI("Wave", res=resolution, fast_gui=True)
 frame = 0
@@ -229,7 +217,6 @@ while gui.running:
 
     iTime = time.time() - start
     render()
-    # show_sdf()
     gui.set_image(color)
     gui.show()
     frame += 1
